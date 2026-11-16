@@ -79,5 +79,18 @@ assert.equal(preview.summary.sourceCards,preview.summary.ready+preview.summary.b
 // CSV streams every matching row and does not expose financial columns to warehouse.
 const exported=await handleRms(new Request('https://returns.test/api/export.csv?channel=Test%20shop',{headers:{Cookie:cs}}),env);assert.equal(exported.status,200);const csv=await exported.text();assert.equal(csv.trim().split('\r\n').length,1010);assert.ok(csv.includes('REPORT-1004'));checks+=3;
 const whExport=await handleRms(new Request('https://returns.test/api/export.csv',{headers:{Cookie:wh}}),env);assert.ok(!(await whExport.text()).split('\r\n')[0].includes('Approved GBP'));checks++;
+
+// Administrator correction is versioned, audited and cannot consume reserved units.
+let correction=(await call('cases/'+a.id,null,admin)).data;
+const correctionBody={purchaseVersion:correction.purchaseVersion,reference:'Corrected invoice',reason:'Verified transcription error',lines:[{sku:'BASIN',purchased:1,prior:1},{sku:'TAP',purchased:1,prior:0}]};
+await act(correction,'correct-purchase',correctionBody,cs,403);
+await act(correction,'correct-purchase',correctionBody,admin,409);
+correction=await act(correction,'correct-purchase',{...correctionBody,lines:[{sku:'BASIN',purchased:3,prior:1},{sku:'TAP',purchased:1,prior:0}]},admin);
+assert.equal(correction.purchase.lines[0].purchased,3);checks++;
+await act(correction,'correct-purchase',correctionBody,admin,409);
+assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM audit WHERE caseId=? AND action='Purchased quantities corrected'").get(a.id).n,1);checks++;
+const remotePage=(await call('cases?page=1&q=REPORT-1004',null,cs)).data;assert.equal(remotePage.total,1);assert.equal(remotePage.items[0].id,'REPORT-1004');checks+=2;
+const closedQueue=(await call('cases?page=1&status=Closed&channel=Test%20shop',null,cs)).data;assert.equal(closedQueue.total,1005);assert.equal(closedQueue.items.length,100);checks+=2;
+const receivingQueue=(await call('cases?page=1&queue=Receiving',null,cs)).data;assert.ok(receivingQueue.items.every(c=>c.status!=='Closed'&&c.inspectionStatus!=='Submitted'));checks++;
 console.log(`PASS: ${checks} operations checks — quantity reservation and race guard, idempotent photos, 1,005-record aggregate reports, role privacy, reviewed Trello import and duplicate reconciliation.`);
 sqlite.close();

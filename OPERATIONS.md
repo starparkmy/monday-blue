@@ -37,7 +37,7 @@ Choose up to 20 photos or use the separate camera input. Photos are compressed i
 
 Reports calculate full-database totals, inspected units, successful refund-ledger amounts and grouped counts on the server, with UK receipt/record date and channel filters. Groups show the top 100 categories, while totals include every matching case. Warehouse users do not receive monetary totals. CSV downloads stream matching records in batches rather than loading every return into React state. Reports are live queries, not a transactionally frozen accounting snapshot.
 
-The operational queue loads 100 records per page; its on-screen filters apply to that page. **All returns** searches the entire database. **Export matching CSV** includes all records matching the search/status/channel/team/work-queue filters; local age filtering does not restrict CSV. Use report date filters or All returns for precise date searches.
+The operational queue loads 100 matching records per page; filters run across the database. **All returns** searches the entire database. **Export matching CSV** includes all records matching the search/status/channel/team/work-queue filters; business-day age filtering also restricts CSV. Use report date filters or All returns for precise date searches.
 
 ### Controlled Trello import
 
@@ -103,3 +103,21 @@ Tests cover existing approval/financial controls plus unidentified evidence, dra
 ## Deployment boundary
 
 GitHub Pages remains a synthetic scanner preview. These workflow improvements belong to the full app. They do not add hosted database/photo services or replace the separate hosting work.
+
+## Queue filters and purchase corrections
+
+Receiving, CS review, Finance and Stock disposition now filter in the database before pagination. Search, status, channel, team and business-day age filters apply to every record; CSV uses the same criteria. Changing a filter resets to page one.
+
+Administrators can expand **Correct verified purchase quantities** under Decision & refund. A sales reference and reason are required. Each correction stores before/after values in audit history. Concurrent edits are rejected. The atomic update refuses quantities that leave insufficient allowance for existing reservations or approved/proposed remedies; allocations and financial records are never rewritten.
+
+## Phone acceptance test (pending physical device verification)
+
+Use a synthetic test return and test photos. On iPhone Safari and Android Chrome:
+1. Open the full app, sign in and check navigation at portrait width. Search a known return using queue filters and verify the same result in CSV.
+2. Receive a parcel, select multiple photos, then take an additional camera photo. Confirm progress and that all saved images appear once.
+3. Interrupt Wi-Fi during an upload, reconnect and retry. Confirm saved files are not duplicated and failed files recover. Keep the dialog open.
+4. Open an image, rotate and zoom, then reopen it to verify stored evidence is unchanged.
+5. On HTTPS, allow camera access and scan a physical barcode. On local HTTP, use the barcode-photo fallback.
+6. As administrator, attempt an invalid purchase reduction (must be blocked), then a valid correction with a reason and inspect Activity.
+
+Automated API tests do not verify camera permission, actual phone uploads or visual layout. Browser access was unavailable during this update, so these device checks remain pending.
