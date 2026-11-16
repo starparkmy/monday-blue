@@ -27,3 +27,7 @@ New records use a date-qualified reference such as 20261115-R01N. Daily numberin
 `npm run build:pages`
 
 Commit the generated `docs` directory. GitHub Pages publishes main /docs. The complete application still requires a separate backend deployment. This repository does not include operational records, local environment files, photos, browser captures or previous repository history.
+
+## Workflow improvements
+
+See [OPERATIONS.md](OPERATIONS.md) for unidentified receiving, structured inspection, item remedies, refund breakdowns, task deadlines, paginated search, MFA enrolment, recovery and encrypted local backup/restore procedures. MFA enforcement and actual backup scheduling require operator setup.
