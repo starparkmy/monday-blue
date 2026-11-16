@@ -5,7 +5,7 @@
 - Unidentified receiving accepts blank SKU/description and stores parcel or return-level photos before item identification. Each item must be identified before inspection submission. CS can enter verified item payment amounts before proposing remedies.
 - Detailed usage condition, packaging, completeness, damage types and missing accessories. Inspection drafts save to the server with version checks.
 - One remedy per item, separately tracked fulfilment, calculated item/delivery/collection/adjustment totals, and credit-note references separate from provider references. Existing case-level resolutions remain readable and retain their original workflow.
-- Server-side search and 100-row pagination. The All returns screen has combined filters. Existing dashboard and CSV load all pages; very large installations should use server-side aggregate reports next.
+- Server-side search and 100-row pagination. The All returns screen has combined filters. Reports and overview totals are calculated with database aggregates. Operational queues load 100 records at a time. CSV exports stream matching records in 100-row chunks.
 - Live task inbox, refreshed every minute, with different inspection and decision targets. Tasks are derived from authoritative case state and disappear when complete. No email is sent. Business days exclude weekends; public holidays are not configured.
 - Authenticator MFA with one-time recovery codes, password recovery, administrator reopening/correction reasons and audit history. No external payment or ERP action is triggered.
 
@@ -18,6 +18,36 @@ Tracking comparisons ignore spaces, hyphens and letter case. A previously receiv
 Before inspection submission, use **Split unidentified item** to replace an unknown placeholder with two or more identified SKU lines and actual quantities. Select the received parcel and give a reason. The original item remains in history; CS must verify quantities and payment amounts. Items with recorded payment amounts cannot be split by this action.
 
 Use **Link existing photo** to associate an uploaded image with an identified item and parcel. One image can support multiple items. Links are additive and audited; the original upload and attachment remain intact. Splitting and linking lock after inspection submission or a remedy proposal.
+
+## Items 5–8: quantities, photos, reports and Trello
+
+### Verify eligible units
+
+In **Decision & refund → Eligible return quantities**, CS verifies the purchased quantity per SKU and records the sales-document reference. Earlier returns means units returned before monday blue, not other cases already in this database. SKU matching ignores letter case and surrounding spaces. Additional missing SKUs can be verified later; existing verified quantities cannot be overwritten through this form.
+
+Select **Reserve / recheck eligible units** before proposing a remedy. The reservation uses the larger of expected and received quantities. Reservations across cases, earlier approved/proposed remedies and pre-system returns consume the same purchased allowance. The database checks allocations atomically to prevent two staff allocating the final units. Physical excess receipts can still be recorded but cannot proceed to a remedy/refund without sufficient eligibility. Changing SKU or quantities requires a recheck. Release an unused duplicate reservation with a reason before another case can use it. Existing approved cases need verified quantities and a reservation before creating a new refund task; confirmed refunds are preserved.
+
+This relies on staff-verified sales information, not an automatic Shopify/ERP connection. Incorrect existing purchase baselines require an audited operator review; do not bypass them by creating a differently spelled order or channel. Each order must retain the same channel/order reference.
+
+### Photo batches and viewing
+
+Choose up to 20 photos or use the separate camera input. Photos are compressed individually, uploaded sequentially and show per-file progress. Failed files can be retried without resending saved files. Stable upload request IDs protect retries when the server saved a file but the response was lost. Retry first refreshes the case version. Keep the upload dialog open; unsent files are not persisted after closing or refreshing. Tap evidence to rotate its view or zoom up to 400%; stored originals remain unchanged.
+
+### Scalable reporting and exports
+
+Reports calculate full-database totals, inspected units, successful refund-ledger amounts and grouped counts on the server, with UK receipt/record date and channel filters. Groups show the top 100 categories, while totals include every matching case. Warehouse users do not receive monetary totals. CSV downloads stream matching records in batches rather than loading every return into React state. Reports are live queries, not a transactionally frozen accounting snapshot.
+
+The operational queue loads 100 records per page; its on-screen filters apply to that page. **All returns** searches the entire database. **Export matching CSV** includes all records matching the search/status/channel/team/work-queue filters; local age filtering does not restrict CSV. Use report date filters or All returns for precise date searches.
+
+### Controlled Trello import
+
+Administrators open **Trello import**, choose a board JSON export (maximum 5 MB and 200 cards per preview), map list names to confirmed YYYY-MM-DD UK receipt dates, then preview. Ambiguous dates block those cards. Review each card's source description, available comments, labels and attachment references. Select up to 25 cards and type the selected count to commit one atomic batch. Re-preview after each batch: source count equals ready + blocked + already imported. Changed previews and previously imported card IDs are rejected.
+
+Each imported card becomes an unmatched **Imported — Needs review** record. Card titles remain legacy references; historical receipt dates are retained separately. No new daily R-number, successful refund or stock movement is inferred. Verify order, actual SKUs, quantities and historical payment/stock reconciliation before normal processing. Raw source descriptions and comments are hidden from Warehouse accounts.
+
+**Attachment references are retained; image binaries are not downloaded or copied.** Unsafe/non-Trello URLs are omitted. The JSON may not contain every historical comment; only comments present in the export can be retained. Use the normal evidence uploader for retrieved image files. No live Trello board is changed, and no real records are imported automatically by installing this release.
+
+Trello export guidance: https://support.atlassian.com/trello/docs/exporting-data-from-trello/ and https://support.atlassian.com/trello/docs/making-sense-of-trellos-json-export/
 
 ## MFA rollout
 
@@ -62,6 +92,7 @@ Administrators can reopen a closed case from Activity with a reason. IDs, confir
 node scripts/test-workflow.mjs
 node scripts/test-receiving.mjs
 node scripts/test-pilot.mjs
+node scripts/test-operations.mjs
 node scripts/test-backup.mjs
 node node_modules/typescript/bin/tsc --noEmit --incremental false
 npm run build

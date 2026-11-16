@@ -26,6 +26,7 @@ const wh=(await call('login',{email:'warehouse@example.test',password:'Test-pass
 const finance=(await call('login',{email:'finance@example.test',password:'Test-password-123'})).cookie;
 const cs=(await call('login',{email:'cs@example.test',password:'Test-password-123'})).cookie;
 await call('users',{name:'Hacker'},wh,403);await call('settings',{warehouses:['UK'],slaDays:1,separationAbove:20000},admin,403,'https://evil.test');
+async function verifyUnits(record, purchased=1){await call('cases/'+record.id+'/purchase',{version:record.version,reference:'Synthetic original sales invoice',lines:record.items.map(i=>({sku:i.sku,purchased,prior:0}))},cs);return (await call('cases/'+record.id+'/eligibility',{version:record.version,reason:'Verified against synthetic invoice'},cs)).data;}
 const payload={order:'ORDER-100',channel:'NES Home',paid:10000,reason:'Damaged on arrival',customer:'Private customer',items:[{sku:'BASIN-WH',name:'Ceramic basin',expected:1,cartons:1,paid:7000},{sku:'CAB-OAK',name:'Vanity cabinet',expected:1,cartons:1,paid:3000}]};
 await call('cases',payload,wh,403);
 let c=(await call('cases',{...payload,legacyCode:'R01N'},cs,201)).data;
@@ -41,6 +42,7 @@ await mutate('inspect',{items:inspections},wh,400);
 for(const item of c.items)await mutate('photo',{itemId:item.id,parcelId:c.parcels[0].id,mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXWQAAAAASUVORK5CYII='},wh);
 await mutate('inspect',{items:inspections},wh);assert.equal(c.status,'CS Review Required');assert.equal(c.refundStatus,'Not initiated');checks+=2;
 await mutate('receive',{location:'A',cartons:1,quantities:[]},wh,409);
+c=await verifyUnits(c,2);
 await mutate('propose',{type:'Partial refund',amount:6000,reason:'Ceramic damage confirmed'},cs);
 await mutate('approve',{approved:true,reason:'exceeds role limit'},cs,403);
 await mutate('approve',{approved:true,reason:'Approved against inspection'},admin);
@@ -61,6 +63,7 @@ assert.notEqual(second.id,c.id);assert.equal(second.shortCode,undefined);checks+
 // Exercise the real atomic balance guard with a second approved RMA on the same order.
 second.resolution={id:crypto.randomUUID(),state:'Approved',amount:5000};second.inspectionStatus='Submitted';second.status='Resolution Approved';
 sqlite.prepare('UPDATE cases SET data=?,status=? WHERE id=?').run(JSON.stringify(second),second.status,second.id);
+second=(await call('cases/'+second.id+'/eligibility',{version:second.version,reason:'Synthetic second allocation'},cs)).data;
 await call('cases/'+second.id+'/refund',{version:second.version},finance,409);
 assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM refunds WHERE caseId=?").get(second.id).n,0);checks++;
 const high=(await call('cases',{...payload,order:'ORDER-200',paid:50000},cs,201)).data;
@@ -70,6 +73,8 @@ await call('cases/'+high.id+'/approve',{version:high.version,approved:true,reaso
 const prior=(await call('cases',{...payload,order:'ORDER-PRIOR',previousRefunds:9000},cs,201)).data;
 prior.resolution={id:crypto.randomUUID(),state:'Approved',amount:2000};prior.inspectionStatus='Submitted';prior.status='Resolution Approved';
 sqlite.prepare('UPDATE cases SET data=?,status=? WHERE id=?').run(JSON.stringify(prior),prior.status,prior.id);
+await verifyUnits(prior);
+prior.version++;
 await call('cases/'+prior.id+'/refund',{version:prior.version},finance,409);
 await call('cases',{...payload,order:'ORDER-PRIOR',previousRefunds:0},cs,400);
 
@@ -90,6 +95,7 @@ assert.equal(businessDue('2026-11-13T12:00:00Z',1),'2026-11-16');checks++;
 let mixed=(await call('cases',{...payload,order:'MIXED-100'},cs,201)).data;
 mixed.inspectionStatus='Submitted';mixed.inspectedAt=new Date().toISOString();mixed.stockStatus='Completed';mixed.items=mixed.items.map(i=>({...i,received:1,stockDone:true}));
 sqlite.prepare('UPDATE cases SET data=? WHERE id=?').run(JSON.stringify(mixed),mixed.id);
+mixed=await verifyUnits(mixed);
 const lines=[{itemId:mixed.items[0].id,type:'Partial refund',amount:5000},{itemId:mixed.items[1].id,type:'Replacement',amount:0}];
 await call('cases/'+mixed.id+'/propose',{version:mixed.version,lines:[lines[0],lines[0]],reason:'duplicate lines'},cs,400);
 await call('cases/'+mixed.id+'/propose',{version:mixed.version,lines,collection:200,reason:'Missing charge basis'},cs,400);

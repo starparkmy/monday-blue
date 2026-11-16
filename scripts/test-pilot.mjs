@@ -46,6 +46,8 @@ for(const scenario of ['Normal return','Unknown parcel','Mixed return','Damaged 
  const tasks=(await call('tasks?page=1',null,cs)).data.items;assert.ok(tasks.some(t=>t.caseId===c.id&&t.type==='Review inspection'));checks++;
  c=(await call('cases/'+c.id,null,cs)).data;
  const lines=c.items.map((i,n)=>({itemId:i.id,type:mixed&&n===1?'Replacement':damaged?'Partial refund':'Full refund',amount:mixed&&n===1?0:damaged?2500:i.paid}));
+ await action('purchase',{reference:'Synthetic sales invoice',lines:c.items.map(i=>({sku:i.sku,purchased:1,prior:0}))},cs);
+ await action('eligibility',{reason:'Verified pilot purchase'},cs);
  await action('propose',{lines,reason:'Synthetic pilot decision',delivery:0,collection:0,adjustment:0},cs);
  await action('refund',{},finance,400);
  await action('approve',{approved:true,reason:'Synthetic pilot approval'},admin);
