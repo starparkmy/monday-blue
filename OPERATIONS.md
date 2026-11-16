@@ -9,6 +9,16 @@
 - Live task inbox, refreshed every minute, with different inspection and decision targets. Tasks are derived from authoritative case state and disappear when complete. No email is sent. Business days exclude weekends; public holidays are not configured.
 - Authenticator MFA with one-time recovery codes, password recovery, administrator reopening/correction reasons and audit history. No external payment or ERP action is triggered.
 
+## Receiving workflow
+
+New CS cases receive an immutable RMA authorisation reference. Their daily R01N-style number is assigned on first warehouse receipt using the Europe/London date, resetting at UK midnight. The displayed full reference includes the date so different days remain distinct. Later parcels retain the first receipt reference; existing numbered cases keep their references.
+
+Tracking comparisons ignore spaces, hyphens and letter case. A previously received tracking number opens the existing return instead of creating another receipt. New receipts reserve tracking atomically; older parcel records are also checked.
+
+Before inspection submission, use **Split unidentified item** to replace an unknown placeholder with two or more identified SKU lines and actual quantities. Select the received parcel and give a reason. The original item remains in history; CS must verify quantities and payment amounts. Items with recorded payment amounts cannot be split by this action.
+
+Use **Link existing photo** to associate an uploaded image with an identified item and parcel. One image can support multiple items. Links are additive and audited; the original upload and attachment remain intact. Splitting and linking lock after inspection submission or a remedy proposal.
+
 ## MFA rollout
 
 1. Open Account security in the full local app. Enter your current password to start setup.
@@ -50,6 +60,8 @@ Administrators can reopen a closed case from Activity with a reason. IDs, confir
 
 ```powershell
 node scripts/test-workflow.mjs
+node scripts/test-receiving.mjs
+node scripts/test-pilot.mjs
 node scripts/test-backup.mjs
 node node_modules/typescript/bin/tsc --noEmit --incremental false
 npm run build

@@ -29,7 +29,7 @@ await call('users',{name:'Hacker'},wh,403);await call('settings',{warehouses:['U
 const payload={order:'ORDER-100',channel:'NES Home',paid:10000,reason:'Damaged on arrival',customer:'Private customer',items:[{sku:'BASIN-WH',name:'Ceramic basin',expected:1,cartons:1,paid:7000},{sku:'CAB-OAK',name:'Vanity cabinet',expected:1,cartons:1,paid:3000}]};
 await call('cases',payload,wh,403);
 let c=(await call('cases',{...payload,legacyCode:'R01N'},cs,201)).data;
-assert.match(c.id,/^\d{8}-R\d{2,}N$/);assert.equal(c.shortCode,'R01N');assert.ok(c.internalId);checks+=3;
+assert.match(c.id,/^RMA-/);assert.equal(c.shortCode,undefined);assert.ok(c.internalId);checks+=3;
 async function mutate(action,data={},cookie=admin,expected=200){const r=await call('cases/'+c.id+'/'+action,{version:c.version,...data},cookie,expected);if(expected===200)c=r.data;return r.data;}
 await mutate('refund',{},wh,403);await mutate('refund',{},finance,400);await mutate('close',{},cs,400);
 await mutate('receive',{location:'Main / quarantine',cartons:2,condition:'Crushed corner',quantities:c.items.map(i=>({id:i.id,received:1}))},wh);
@@ -57,7 +57,7 @@ for(const item of c.items)await mutate('stock',{itemId:item.id,reference:'ERP-'+
 await mutate('close',{},cs);assert.equal(c.status,'Closed');assert.equal(c.refunds.length,2);checks+=2;
 await mutate('note',{note:'Attempt to edit closed case'},admin,409);
 let second=(await call('cases',{...payload,legacyCode:'R01N'},cs,201)).data;
-assert.notEqual(second.id,c.id);assert.equal(second.shortCode,'R02N');checks+=2;
+assert.notEqual(second.id,c.id);assert.equal(second.shortCode,undefined);checks+=2;
 // Exercise the real atomic balance guard with a second approved RMA on the same order.
 second.resolution={id:crypto.randomUUID(),state:'Approved',amount:5000};second.inspectionStatus='Submitted';second.status='Resolution Approved';
 sqlite.prepare('UPDATE cases SET data=?,status=? WHERE id=?').run(JSON.stringify(second),second.status,second.id);
