@@ -92,5 +92,17 @@ assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM audit WHERE caseId=? AND act
 const remotePage=(await call('cases?page=1&q=REPORT-1004',null,cs)).data;assert.equal(remotePage.total,1);assert.equal(remotePage.items[0].id,'REPORT-1004');checks+=2;
 const closedQueue=(await call('cases?page=1&status=Closed&channel=Test%20shop',null,cs)).data;assert.equal(closedQueue.total,1005);assert.equal(closedQueue.items.length,100);checks+=2;
 const receivingQueue=(await call('cases?page=1&queue=Receiving',null,cs)).data;assert.ok(receivingQueue.items.every(c=>c.status!=='Closed'&&c.inspectionStatus!=='Submitted'));checks++;
+
+const scanTracking=(await call('scan?code=unknown-not-linked',null,wh)).data;assert.equal(scanTracking.total,0);checks++;
+let scanFixture=JSON.parse(sqlite.prepare('SELECT data FROM cases WHERE id=?').get(b.id).data);scanFixture.parcels[0].tracking='1Z 44V-W57';scanFixture.shortCode='R01N';scanFixture.businessDate='2026-11-03';scanFixture.receivedBusinessDate='2026-11-03';scanFixture.collectionReference='CN647529';sqlite.prepare('UPDATE cases SET data=? WHERE id=?').run(JSON.stringify(scanFixture),b.id);
+assert.equal((await call('scan?code=1z44vw57',null,wh)).data.items[0].id,b.id);checks++;
+assert.equal((await call('scan?code=CN647529',null,wh)).data.items[0].id,b.id);checks++;
+assert.equal((await call('scan?code=R01N',null,wh)).data.requiresDate,true);checks++;
+assert.ok((await call('scan?code=R01N&date=2026-11-03',null,wh)).data.items.some(c=>c.id===b.id));checks++;
+assert.equal((await call('scan?code=R01N&date=2026-11-04',null,wh)).data.total,0);checks++;
+assert.equal((await call('scan?code=BASIN',null,wh)).data.items[0].customer,undefined);checks++;
+await call('scan?code=R01N&date=2026-02-30',null,wh,400);
+
+scanFixture.items[0].barcode='5012345678900';sqlite.prepare('UPDATE cases SET data=? WHERE id=?').run(JSON.stringify(scanFixture),b.id);assert.ok((await call('scan?code=5012345678900',null,wh)).data.items.some(c=>c.id===b.id));checks++;
 console.log(`PASS: ${checks} operations checks — quantity reservation and race guard, idempotent photos, 1,005-record aggregate reports, role privacy, reviewed Trello import and duplicate reconciliation.`);
 sqlite.close();

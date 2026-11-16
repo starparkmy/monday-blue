@@ -121,3 +121,15 @@ Use a synthetic test return and test photos. On iPhone Safari and Android Chrome
 6. As administrator, attempt an invalid purchase reduction (must be blocked), then a valid correction with a reason and inspect Activity.
 
 Automated API tests do not verify camera permission, actual phone uploads or visual layout. Browser access was unavailable during this update, so these device checks remain pending.
+
+## Parcel barcodes, old stickers and collection notes
+
+Open **Receiving → Open camera**. Live barcode reading requires HTTPS; selecting/taking a photo works on the local Wi-Fi address. Choose **Read barcode** for courier/product labels or **Read printed text** for an old R-number sticker or collection note. Drag across the photo to crop out background, and rotate sideways/upside-down text before OCR. Barcode photos try four orientations. OCR shows confidence and editable text; suggestions are unverified.
+
+Choose or type a confirmed code and, for an old R01N-style sticker, confirm its UK receipt date. Search includes parcel tracking, collection references, SKU and optional product barcode/EAN, as well as return/order references. Spaces and hyphens are ignored. Results always require staff selection; a shared SKU or repeated daily code must never silently select a customer. Product EANs must first be verified against an item's SKU under Identify / update item details.
+
+When no record is linked, **Use reviewed text for a new return** lets staff choose the code type and open an unidentified draft with the reviewed text in notes. Verify order, customer, SKU, quantities and payment data manually before saving or matching. The scanned image is not automatically attached: upload the original through evidence capture. The system does not invent order details from a tracking code or automatically process refunds.
+
+OCR runs in a browser worker with locally served English model assets. Photos are not sent to an OCR provider. The first OCR load is substantial; internet is not needed for third-party assets once the app server supplies them. `scripts/prepare-ocr.mjs` copies installed model/worker assets into public/ocr before dev/build. Run npm install after updating dependencies. Generated OCR assets are excluded from Git and generated during build.
+
+Real supplied screenshot checks: cropped R32N text was recognised, and a product Code 128 barcode decoded. Small/blurred collection-note text and several courier screenshots were not reliable. Use original close-up photos rather than Trello screenshots; review every extracted value. Actual phone camera and browser interaction testing remains pending browser access. These changes are for the full app, not the standalone GitHub Pages preview.
