@@ -84,6 +84,41 @@ export async function handleRms(request:Request,env:Bindings):Promise<Response>{
  const stream=new ReadableStream({async pull(controller){try{if(!header){header=true;controller.enqueue(encoder.encode('\ufeff'+csv(fields)));return;}const page=await rows(db,'SELECT id,data FROM cases WHERE '+filters.join(' AND ')+' AND id>? ORDER BY id LIMIT 100',...args,cursor);if(!page.length){controller.close();return;}cursor=page[page.length-1].id;const text=page.map((row:any)=>{const c=JSON.parse(row.data);return csv([c.authorisationReference||c.id,c.reference||'',c.order,c.channel,c.status,c.reason,c.created,c.inspectionStatus,c.refundStatus,c.stockStatus,...(u.role==='Warehouse'?[]:[((c.resolution?.amount||0)/100).toFixed(2)])]);}).join('');controller.enqueue(encoder.encode(text));if(page.length<100)controller.close();}catch(e){controller.error(e);}}});
  return new Response(stream,{headers:{'Content-Type':'text/csv;charset=utf-8','Content-Disposition':'attachment; filename="monday-blue-returns.csv"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
  }
+
+ // Mobile photo board: independent cards, with the existing staff authentication.
+ if(path==='board/cards'&&request.method==='GET'){
+ const page=Math.max(1,Math.min(10000,Number(url.searchParams.get('page'))||1));
+ const all=await rows(db,"SELECT value FROM settings WHERE key LIKE 'board-card:%' ORDER BY json_extract(value,'$.created') DESC LIMIT 50 OFFSET ?",(page-1)*50);
+ const total=(await one(db,"SELECT COUNT(*) total FROM settings WHERE key LIKE 'board-card:%'")).total;
+ return json({total,page,items:all.map((r:any)=>{const c=JSON.parse(r.value);return {...c,photos:undefined,comments:undefined,photoCount:c.photos.length,commentCount:c.comments.length,cover:'/api/board/photos/'+c.id+'/0'};})});
+ }
+ if(path.startsWith('board/photos/')&&request.method==='GET'){
+ const parts=path.split('/'),r=await one(db,'SELECT value FROM settings WHERE key=?','board-card:'+parts[2]);check(r,'Card not found.',404);const c=JSON.parse(r.value);check(/^\d+$/.test(parts[3]||''),'Photo not found.',404);const photo=c.photos[Number(parts[3])];check(photo,'Photo not found.',404);const object=await env.BUCKET.get(photo.key);check(object,'Photo not found.',404);return new Response(object.body,{headers:{'Content-Type':photo.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+ }
+ if(path==='board/cards'&&request.method==='POST'||path.startsWith('board/cards/')){
+ const creating=path==='board/cards';const cid=creating?'B-'+(await hash(u.id+':'+String(body.requestId))).slice(0,32):path.split('/')[2];
+ const key='board-card:'+cid,row=await one(db,'SELECT value FROM settings WHERE key=?',key);
+ if(request.method==='GET'){check(row,'Card not found.',404);return json(JSON.parse(row.value));}
+ allow(u,['Warehouse','Inventory','Customer service']);check(request.method==='POST','Method not allowed.',405);check(/^[a-zA-Z0-9-]{10,100}$/.test(body.requestId||''),'A save request ID is required.');
+ const fingerprint=await hash(JSON.stringify(body));const previous=row?JSON.parse(row.value):null;
+ if(previous?.mutations?.[body.requestId]){check(previous.mutations[body.requestId]===fingerprint,'This save was already used with different details.',409);return json(previous);}
+ if(creating)check(!row,'Card already exists.',409);else{check(row,'Card not found.',404);check(body.version===previous.version,'Another staff member updated this card. Reopen it before editing.',409);}
+ const tokens=body.photos||[];check(Array.isArray(tokens)&&tokens.length<=8&&new Set(tokens).size===tokens.length,'Add up to 8 photos at a time.');if(creating)check(tokens.length>0,'Take or choose at least one photo.');
+ const added=[];for(const token of tokens){const staged=await one(db,'SELECT value FROM settings WHERE key=?','scan-evidence:'+str(token,100));check(staged,'A photo upload is missing. Please retry.');const photo=JSON.parse(staged.value);check(photo.owner===u.id,'This photo belongs to another upload.',403);check(!await one(db,'SELECT key FROM settings WHERE key=?','scan-consumed:'+token),'This photo was already saved on another card.',409);check(await env.BUCKET.get(photo.key),'Photo storage unavailable. Retry saving.',503);added.push({key:photo.key,mime:photo.mime,name:photo.name,actor:u.name,created:now()});}
+ const c=previous||{id:cid,...await reserveReturnNumber(db),created:now(),createdBy:u.name,title:'',description:'',labels:['NEW'],photos:[],comments:[],mutations:{},version:0};
+ if(body.title!==undefined)c.title=str(body.title,150);if(body.description!==undefined)c.description=str(body.description,5000);
+ if(body.labels!==undefined){check(Array.isArray(body.labels)&&body.labels.every((x:any)=>legacyLabels.includes(x)),'Choose valid labels.');c.labels=[...new Set(body.labels)];}
+ check(c.photos.length+added.length<=40,'Each card supports up to 40 photos.');c.photos.push(...added);
+ if(str(body.comment,2000)){check(c.comments.length<200,'This card has reached 200 comments.');c.comments.push({id:id(),text:str(body.comment,2000),actor:u.name,created:now()});}
+ c.version++;c.updated=now();c.mutations[body.requestId]=fingerprint;
+ const batch=[creating?stmt(db,'INSERT INTO settings(key,value) VALUES(?,?)',key,JSON.stringify(c)):stmt(db,'UPDATE settings SET value=? WHERE key=? AND value=?',JSON.stringify(c),key,row.value)];
+ // A unique mutation guard forces the whole batch to roll back on a stale update.
+ batch.push(stmt(db,'INSERT INTO settings(key,value) VALUES(?,?)','board-version:'+cid+':'+c.version,body.requestId));
+ for(const token of tokens)batch.push(stmt(db,'INSERT INTO settings(key,value) VALUES(?,?)','scan-consumed:'+token,cid));
+ batch.push(auditSql(db,u,creating?'Photo card created':'Photo card updated',{cardId:cid,reference:c.reference,photosAdded:added.length}));
+ try{await db.batch(batch)}catch{const latest=await one(db,'SELECT value FROM settings WHERE key=?',key);if(latest){const saved=JSON.parse(latest.value);if(saved.mutations?.[body.requestId]===fingerprint)return json(saved);}throw new HttpError(409,'This card changed or a photo was already saved. Reopen the card before trying again.');}
+ return json(c,creating?201:200);
+ }
  if(path==='scan/evidence'&&request.method==='POST'){
  allow(u,['Warehouse','Inventory','Customer service']);check(['image/jpeg','image/png','image/webp'].includes(body.mime),'Use JPEG, PNG or WebP original photos.');check(typeof body.data==='string'&&body.data.length<5700000,'Each original photo must be 4 MB or smaller.');let bytes:Uint8Array;try{bytes=Uint8Array.from(atob(body.data),x=>x.charCodeAt(0))}catch{throw new HttpError(400,'Invalid photo.');}check(bytes.length>12&&bytes.length<=4*1024*1024,'Each original photo must be 4 MB or smaller.');check((body.mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216)||(body.mime==='image/png'&&bytes[0]===137&&bytes[1]===80)||(body.mime==='image/webp'&&String.fromCharCode(...bytes.slice(0,4))==='RIFF'),'Image content does not match its type.');const token=id(),key='scan-evidence/'+u.id+'/'+token;await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:body.mime}});await stmt(db,'INSERT INTO settings(key,value) VALUES(?,?)','scan-evidence:'+token,JSON.stringify({owner:u.id,key,mime:body.mime,name:str(body.name,200),created:now(),consumed:false})).run();return json({token},201);
  }

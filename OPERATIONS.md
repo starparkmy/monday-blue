@@ -1,3 +1,20 @@
+# Mobile photo board — November 2026 rebuild
+
+The home page now opens the new mobile-first photo board. The previous application and its records remain at `/legacy`. Existing staff accounts are reused; board cards are stored separately from old workflow cases. Nothing is migrated or deleted automatically.
+
+## First workflow
+1. Sign in, tap **New return**, then **Take photo** or **Choose photos**.
+2. Tap **Save return**. Only a photo is required. The server assigns a dated unique reference using UK midnight; counters are shared with the previous workspace so references cannot collide.
+3. Open the saved card to add a title, description, labels, more photos and comments. Received-date lists follow the Trello reference.
+
+Staff with Warehouse, Inventory, Customer service or Administrator roles can create and edit. Other staff can view. Photos are served only after login and are never publicly cached. Saves require a connection; unsaved photos remain only in the current page. Retry preserves the same request ID; concurrent edits are rejected instead of overwriting another staff member. Up to 8 photos per upload and 40 per card. JPEG, PNG and WebP accepted. Photos larger than 4 MB are resized to a maximum 2048 pixels and JPEG quality 85% with a visible notice. Smaller files are retained unchanged. Browser camera/file capture does not use the barcode scanner.
+
+The first board is for record keeping: labels do not execute refunds or stock changes. Description and comments are manual; OCR is not required. Search filters loaded cards (50 per page; load more for older cards). Photo removal after saving, offline saving and automatic Trello migration are outside this first version. The previous workflow's backup/export UI does not yet provide a complete photo-board export; preserve both the D1 settings data and R2 storage together for this version.
+
+Development verification uses a separate local database and synthetic images. Keep `.wrangler`, local logs, test credentials and customer photos out of Git. The new authenticated app is not deployed by the GitHub Pages preview.
+
+---
+
 # monday blue operations
 
 ## Changes in this release

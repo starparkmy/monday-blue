@@ -117,5 +117,24 @@ await call('scan/receive',{...scanned,requestId:'scan-save-test-0004',photos:[],
 const foreign=(await call('scan/evidence',{mime:'image/png',name:'other.png',data:photo},cs,201)).data;await call('scan/receive',{...scanned,requestId:'scan-save-test-0005',tracking:'FOREIGN',photos:[foreign.token]},wh,409);
 await call('scan/receive',scanned,finance,403);
 assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM cases WHERE id LIKE 'RMA-SCAN-%'").get().n,1);checks++;
+// New mobile board: a photo alone is sufficient, without an order or item form.
+await call('board/cards',null,null,401);
+const boardPhoto=(await call('scan/evidence',{mime:'image/png',name:'parcel.png',data:photo},wh,201)).data.token;
+const boardBody={requestId:'photo-board-create-0001',photos:[boardPhoto]};
+const boardCard=(await call('board/cards',boardBody,wh,201)).data;
+assert.equal(boardCard.photos.length,1);assert.equal(boardCard.description,'');assert.match(boardCard.reference,/^\d{8}-R\d+N$/);assert.equal(boardCard.version,1);
+assert.equal((await call('board/cards',boardBody,wh)).data.id,boardCard.id);
+const boardEdit={requestId:'photo-board-edit-0001',version:1,title:'Parcel received',description:'Customer and items to follow',labels:['NEW','Missing Parts'],comment:'Photographed at goods in'};
+const edited=(await call('board/cards/'+boardCard.id,boardEdit,wh)).data;
+assert.equal(edited.comments.length,1);assert.equal(edited.comments[0].actor,'Warehouse Test');assert.equal(edited.version,2);
+assert.equal((await call('board/cards/'+boardCard.id,boardEdit,wh)).data.comments.length,1);
+await call('board/cards/'+boardCard.id,{...boardEdit,requestId:'photo-board-stale-0002'},wh,409);
+await call('board/cards/'+boardCard.id,{...boardEdit,version:2,requestId:'photo-board-role-0002'},finance,403);
+await call('board/cards',{requestId:'photo-board-empty-0002',photos:[]},wh,400);
+await call('board/cards',{requestId:'photo-board-reuse-0002',photos:[boardPhoto]},wh,409);
+await call('board/cards/'+boardCard.id,{...boardEdit,version:2,requestId:'photo-board-label-0002',labels:['invented']},wh,400);
+const boardList=(await call('board/cards',null,wh)).data;assert.equal(boardList.total,1);assert.equal(boardList.items[0].photoCount,1);assert.equal(boardList.items[0].photos,undefined);
+const imageResponse=await handleRms(new Request('https://returns.test/api/board/photos/'+boardCard.id+'/0',{headers:{Cookie:wh}}),env);assert.equal(imageResponse.status,200);assert.equal(imageResponse.headers.get('cache-control'),'private, no-store');assert.equal(Buffer.from(await imageResponse.arrayBuffer()).toString('base64'),photo);
+const privateImage=await handleRms(new Request('https://returns.test/api/board/photos/'+boardCard.id+'/0'),env);assert.equal(privateImage.status,401);
 console.log(`PASS: ${checks} operations checks — quantity reservation and race guard, idempotent photos, 1,005-record aggregate reports, role privacy, reviewed Trello import and duplicate reconciliation.`);
 sqlite.close();
