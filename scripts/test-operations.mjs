@@ -104,5 +104,18 @@ assert.equal((await call('scan?code=BASIN',null,wh)).data.items[0].customer,unde
 await call('scan?code=R01N&date=2026-02-30',null,wh,400);
 
 scanFixture.items[0].barcode='5012345678900';sqlite.prepare('UPDATE cases SET data=? WHERE id=?').run(JSON.stringify(scanFixture),b.id);assert.ok((await call('scan?code=5012345678900',null,wh)).data.items.some(c=>c.id===b.id));checks++;
+
+// Scan-to-receipt stores originals and receipt state atomically and is retry-safe.
+const staged=(await call('scan/evidence',{mime:'image/png',name:'label.png',data:photo},wh,201)).data;
+const scanned={requestId:'scan-save-test-0001',tracking:'SCAN TRK-100',location:'Q-Scan',cartons:1,items:[{sku:'',name:'Unknown carton',received:2}],photos:[staged.token],notes:'Reviewed scan'};
+const received=(await call('scan/receive',scanned,wh,201)).data;assert.match(received.reference,/^\d{8}-R\d+N$/);assert.equal(received.inspectionStatus,'In progress');assert.equal(received.items[0].received,2);assert.equal(received.photos.length,1);assert.equal(received.photos[0].parcelId,received.parcels[0].id);assert.equal(received.unmatched,true);assert.equal(received.refundStatus,'Not initiated');checks+=7;
+const photoRow=sqlite.prepare('SELECT key FROM photos WHERE id=?').get(received.photos[0].id);assert.equal(Buffer.from(files.get(photoRow.key)).toString('base64'),photo);checks++;
+const repeat=(await call('scan/receive',scanned,wh)).data;assert.equal(repeat.id,received.id);assert.equal(repeat.photos.length,1);checks+=2;
+const duplicate=(await call('scan/receive',{...scanned,requestId:'scan-save-test-0002'},wh,409)).data;assert.equal(duplicate.existingReturnId,received.id);checks++;
+await call('scan/receive',{...scanned,requestId:'scan-save-test-0003',tracking:'DIFFERENT'},wh,409);
+await call('scan/receive',{...scanned,requestId:'scan-save-test-0004',photos:[],tracking:'EMPTY'},wh,400);
+const foreign=(await call('scan/evidence',{mime:'image/png',name:'other.png',data:photo},cs,201)).data;await call('scan/receive',{...scanned,requestId:'scan-save-test-0005',tracking:'FOREIGN',photos:[foreign.token]},wh,409);
+await call('scan/receive',scanned,finance,403);
+assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM cases WHERE id LIKE 'RMA-SCAN-%'").get().n,1);checks++;
 console.log(`PASS: ${checks} operations checks — quantity reservation and race guard, idempotent photos, 1,005-record aggregate reports, role privacy, reviewed Trello import and duplicate reconciliation.`);
 sqlite.close();
