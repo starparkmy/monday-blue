@@ -43,3 +43,8 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Encrypted backups and restore outputs
+*.mblue
+/backups/
+/restore-check*/

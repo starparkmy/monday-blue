@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {captureState,encryptBackup,decryptBackup,restoreState} from './backup-local.mjs';
+const root=mkdtempSync(path.join(tmpdir(),'monday-backup-test-')),source=path.join(root,'source');mkdirSync(source);
+const db=new DatabaseSync(path.join(source,'test.sqlite'));db.exec("CREATE TABLE cases(id TEXT PRIMARY KEY); INSERT INTO cases VALUES('fixture-only');");db.close();writeFileSync(path.join(source,'photo.bin'),Buffer.from([1,2,3,4]));
+const bundle=captureState(source),password='synthetic-backup-password',encrypted=encryptBackup(bundle,password);
+assert.throws(()=>decryptBackup(encrypted,'wrong-password'));const tampered=Buffer.from(encrypted);tampered[tampered.length-1]^=1;assert.throws(()=>decryptBackup(tampered,password));
+const restored=path.join(root,'restored');assert.equal(restoreState(decryptBackup(encrypted,password),restored).databases,1);assert.deepEqual(readFileSync(path.join(restored,'photo.bin')),Buffer.from([1,2,3,4]));assert.throws(()=>restoreState(bundle,restored));assert.throws(()=>restoreState({...bundle,files:[{...bundle.files[0],path:'../escape'}]},path.join(root,'bad')));
+const check=new DatabaseSync(path.join(restored,'test.sqlite'));assert.equal(check.prepare('SELECT id FROM cases').get().id,'fixture-only');check.close();console.log('PASS: encrypted backup round-trip, photo bytes, SQL restoration, wrong password, tampering, traversal and overwrite protections.');

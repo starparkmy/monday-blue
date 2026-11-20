@@ -1,2 +1,2 @@
-import Desk from './desk';
-export default function Home(){return <Desk/>}
+import MobileBoard from './mobile-board';
+export default function Home(){return <MobileBoard/>}

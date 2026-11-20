@@ -3,10 +3,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import ts from 'typescript';
 const source=ts.transpileModule(readFileSync('lib/rms.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
-const {handleRms}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {handleRms,ukBusinessDate,reserveReturnNumber,totp,businessDue}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON');for(const f of readdirSync('drizzle').filter(x=>x.endsWith('.sql')).sort())sqlite.exec(readFileSync('drizzle/'+f,'utf8'));
 class Statement{constructor(sql,args=[]){this.sql=sql;this.args=args}bind(...args){return new Statement(this.sql,args)}async first(){return sqlite.prepare(this.sql).get(...this.args)||null}async all(){return {results:sqlite.prepare(this.sql).all(...this.args)}}async run(){return {meta:{changes:Number(sqlite.prepare(this.sql).run(...this.args).changes)}}}}
 const db={prepare:sql=>new Statement(sql),batch:async statements=>{sqlite.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sqlite.exec('COMMIT');return result}catch(e){sqlite.exec('ROLLBACK');throw e}}};
+// UK midnight follows GMT/BST; daily references are reserved atomically in SQLite.
+for(const [instant,expected] of [['2026-01-01T23:59:59Z','2026-01-01'],['2026-01-02T00:00:00Z','2026-01-02'],['2026-06-01T22:59:59Z','2026-06-01'],['2026-06-01T23:00:00Z','2026-06-02'],['2026-03-29T23:00:00Z','2026-03-30'],['2026-10-25T23:00:00Z','2026-10-25']])assert.equal(ukBusinessDate(new Date(instant)),expected);
+const allocated=await Promise.all(Array.from({length:20},()=>reserveReturnNumber(db,new Date('2020-06-01T12:00:00Z'))));
+assert.equal(new Set(allocated.map(x=>x.reference)).size,20);
+assert.equal(allocated[0].reference,'20200601-R01N');
+assert.equal(allocated[19].reference,'20200601-R20N');
+assert.equal((await reserveReturnNumber(db,new Date('2020-06-01T23:00:00Z'))).reference,'20200602-R01N');
 const files=new Map();const env={DB:db,BUCKET:{put:async(k,v)=>files.set(k,v),get:async k=>files.has(k)?{body:files.get(k)}:null},SETUP_TOKEN:'local-integration-tests-only'};
 let checks=0;async function call(path,body,cookie,expected=200,origin='https://returns.test'){const r=await handleRms(new Request('https://returns.test/api/'+path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',Origin:origin}:{}),...(cookie?{Cookie:cookie}:{})},...(body?{body:JSON.stringify(body)}:{})}),env);const d=await r.json();assert.equal(r.status,expected,path+' '+JSON.stringify(d));checks++;return {data:d,cookie:r.headers.get('set-cookie')?.split(';')[0]};}
 await call('cases',null,null,401);await call('setup',{email:'owner@example.test',name:'Owner',password:'Test-password-123',token:'wrong'},null,403);
@@ -19,20 +26,23 @@ const wh=(await call('login',{email:'warehouse@example.test',password:'Test-pass
 const finance=(await call('login',{email:'finance@example.test',password:'Test-password-123'})).cookie;
 const cs=(await call('login',{email:'cs@example.test',password:'Test-password-123'})).cookie;
 await call('users',{name:'Hacker'},wh,403);await call('settings',{warehouses:['UK'],slaDays:1,separationAbove:20000},admin,403,'https://evil.test');
+async function verifyUnits(record, purchased=1){await call('cases/'+record.id+'/purchase',{version:record.version,reference:'Synthetic original sales invoice',lines:record.items.map(i=>({sku:i.sku,purchased,prior:0}))},cs);return (await call('cases/'+record.id+'/eligibility',{version:record.version,reason:'Verified against synthetic invoice'},cs)).data;}
 const payload={order:'ORDER-100',channel:'NES Home',paid:10000,reason:'Damaged on arrival',customer:'Private customer',items:[{sku:'BASIN-WH',name:'Ceramic basin',expected:1,cartons:1,paid:7000},{sku:'CAB-OAK',name:'Vanity cabinet',expected:1,cartons:1,paid:3000}]};
 await call('cases',payload,wh,403);
-let c=(await call('cases',payload,cs,201)).data;
+let c=(await call('cases',{...payload,legacyCode:'R01N'},cs,201)).data;
+assert.match(c.id,/^RMA-/);assert.equal(c.shortCode,undefined);assert.ok(c.internalId);checks+=3;
 async function mutate(action,data={},cookie=admin,expected=200){const r=await call('cases/'+c.id+'/'+action,{version:c.version,...data},cookie,expected);if(expected===200)c=r.data;return r.data;}
 await mutate('refund',{},wh,403);await mutate('refund',{},finance,400);await mutate('close',{},cs,400);
 await mutate('receive',{location:'Main / quarantine',cartons:2,condition:'Crushed corner',quantities:c.items.map(i=>({id:i.id,received:1}))},wh);
 assert.equal(c.customer,undefined);assert.equal(c.paid,undefined);checks+=2;
 c=(await call('cases/'+c.id,null,admin)).data;
 await call('cases/'+c.id+'/note',{version:1,note:'stale edit'},admin,409);
-const inspections=c.items.map(i=>({...i,grade:'D',location:'Q-04',disposition:'Quarantine',checks:['Packaging','Condition','Completeness'],notes:'Cracked ceramic; cabinet water marks'}));
+const inspections=c.items.map(i=>({...i,condition:'Used',completeness:'Complete',packaging:'Damaged',damage:['Cracked'],grade:'D',location:'Q-04',disposition:'Quarantine',checks:['Packaging','Condition','Completeness'],notes:'Cracked ceramic; cabinet water marks'}));
 await mutate('inspect',{items:inspections},wh,400);
 for(const item of c.items)await mutate('photo',{itemId:item.id,parcelId:c.parcels[0].id,mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXWQAAAAASUVORK5CYII='},wh);
 await mutate('inspect',{items:inspections},wh);assert.equal(c.status,'CS Review Required');assert.equal(c.refundStatus,'Not initiated');checks+=2;
 await mutate('receive',{location:'A',cartons:1,quantities:[]},wh,409);
+c=await verifyUnits(c,2);
 await mutate('propose',{type:'Partial refund',amount:6000,reason:'Ceramic damage confirmed'},cs);
 await mutate('approve',{approved:true,reason:'exceeds role limit'},cs,403);
 await mutate('approve',{approved:true,reason:'Approved against inspection'},admin);
@@ -48,10 +58,12 @@ await mutate('close',{},cs,400);
 for(const item of c.items)await mutate('stock',{itemId:item.id,reference:'ERP-'+item.sku},admin);
 await mutate('close',{},cs);assert.equal(c.status,'Closed');assert.equal(c.refunds.length,2);checks+=2;
 await mutate('note',{note:'Attempt to edit closed case'},admin,409);
-let second=(await call('cases',payload,cs,201)).data;
+let second=(await call('cases',{...payload,legacyCode:'R01N'},cs,201)).data;
+assert.notEqual(second.id,c.id);assert.equal(second.shortCode,undefined);checks+=2;
 // Exercise the real atomic balance guard with a second approved RMA on the same order.
 second.resolution={id:crypto.randomUUID(),state:'Approved',amount:5000};second.inspectionStatus='Submitted';second.status='Resolution Approved';
 sqlite.prepare('UPDATE cases SET data=?,status=? WHERE id=?').run(JSON.stringify(second),second.status,second.id);
+second=(await call('cases/'+second.id+'/eligibility',{version:second.version,reason:'Synthetic second allocation'},cs)).data;
 await call('cases/'+second.id+'/refund',{version:second.version},finance,409);
 assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM refunds WHERE caseId=?").get(second.id).n,0);checks++;
 const high=(await call('cases',{...payload,order:'ORDER-200',paid:50000},cs,201)).data;
@@ -61,8 +73,66 @@ await call('cases/'+high.id+'/approve',{version:high.version,approved:true,reaso
 const prior=(await call('cases',{...payload,order:'ORDER-PRIOR',previousRefunds:9000},cs,201)).data;
 prior.resolution={id:crypto.randomUUID(),state:'Approved',amount:2000};prior.inspectionStatus='Submitted';prior.status='Resolution Approved';
 sqlite.prepare('UPDATE cases SET data=?,status=? WHERE id=?').run(JSON.stringify(prior),prior.status,prior.id);
+await verifyUnits(prior);
+prior.version++;
 await call('cases/'+prior.id+'/refund',{version:prior.version},finance,409);
 await call('cases',{...payload,order:'ORDER-PRIOR',previousRefunds:0},cs,400);
+
+// Unidentified receiving and parcel-level evidence before item identification.
+let unknown=(await call('cases',{...payload,unmatched:true,order:'',items:[{sku:'',name:'',expected:1,cartons:1,paid:0}]},wh,201)).data;
+assert.equal(unknown.items[0].sku,'UNKNOWN');checks++;
+unknown=(await call('cases/'+unknown.id+'/photo',{version:unknown.version,itemId:'',parcelId:'',mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXWQAAAAASUVORK5CYII='},wh)).data;
+assert.equal(unknown.photos[0].itemId,'');checks++;
+unknown=(await call('cases/'+unknown.id+'/receive',{version:unknown.version,cartons:1,location:'Q-01',quantities:[{id:unknown.items[0].id,received:1}]},wh)).data;
+unknown=(await call('cases/'+unknown.id+'/identify',{version:unknown.version,itemId:unknown.items[0].id,sku:'IDENTIFIED',name:'Identified basin'},wh)).data;
+assert.equal(unknown.items[0].unidentified,false);checks++;
+unknown=(await call('cases/'+unknown.id+'/draft',{version:unknown.version,items:[{...unknown.items[0],condition:'Used',completeness:'Missing parts',missingParts:'Mounting screws',damage:['Scratched'],checks:['Packaging']}]},wh)).data;
+assert.equal(unknown.inspectionDraft[0].missingParts,'Mounting screws');checks++;
+await call('cases/'+unknown.id+'/draft',{version:unknown.version-1,items:unknown.items},wh,409);
+const tasks=(await call('tasks?page=1',null,cs)).data.items;assert.ok(tasks.some(t=>t.caseId===unknown.id&&t.type==='Identify customer / order'));checks++;
+assert.equal(businessDue('2026-11-13T12:00:00Z',1),'2026-11-16');checks++;
+// Mixed remedy: refund one item, replace the other. Financial completion alone must not close it.
+let mixed=(await call('cases',{...payload,order:'MIXED-100'},cs,201)).data;
+mixed.inspectionStatus='Submitted';mixed.inspectedAt=new Date().toISOString();mixed.stockStatus='Completed';mixed.items=mixed.items.map(i=>({...i,received:1,stockDone:true}));
+sqlite.prepare('UPDATE cases SET data=? WHERE id=?').run(JSON.stringify(mixed),mixed.id);
+mixed=await verifyUnits(mixed);
+const lines=[{itemId:mixed.items[0].id,type:'Partial refund',amount:5000},{itemId:mixed.items[1].id,type:'Replacement',amount:0}];
+await call('cases/'+mixed.id+'/propose',{version:mixed.version,lines:[lines[0],lines[0]],reason:'duplicate lines'},cs,400);
+await call('cases/'+mixed.id+'/propose',{version:mixed.version,lines,collection:200,reason:'Missing charge basis'},cs,400);
+mixed=(await call('cases/'+mixed.id+'/propose',{version:mixed.version,lines,delivery:500,collection:200,adjustment:-100,adjustmentReason:'Documented approved adjustment',reason:'One refund and one replacement'},cs)).data;
+assert.equal(mixed.resolution.amount,5200);checks++;
+mixed=(await call('cases/'+mixed.id+'/approve',{version:mixed.version,approved:true,reason:'Approved mixed case'},admin)).data;
+mixed=(await call('cases/'+mixed.id+'/refund',{version:mixed.version},finance)).data;
+mixed=(await call('cases/'+mixed.id+'/reconcile',{version:mixed.version,result:'Success',reference:'TX-MIXED',creditNote:'CN-MIXED'},finance)).data;
+assert.equal(mixed.creditNotes[mixed.refunds[0].id],'CN-MIXED');checks++;
+await call('cases/'+mixed.id+'/close',{version:mixed.version},cs,400);
+mixed=(await call('cases/'+mixed.id+'/fulfil',{version:mixed.version,itemId:mixed.items[1].id,reference:'REPLACEMENT-100'},cs)).data;
+mixed=(await call('cases/'+mixed.id+'/close',{version:mixed.version},cs)).data;
+await call('cases/'+mixed.id+'/reopen',{version:mixed.version,reason:'Follow-up'},cs,403);
+mixed=(await call('cases/'+mixed.id+'/reopen',{version:mixed.version,reason:'Customer follow-up'},admin)).data;
+assert.equal(mixed.refundStatus,'Success');assert.equal(mixed.stockStatus,'Completed');checks+=2;
+await call('cases/'+mixed.id+'/correct',{version:mixed.version,itemId:mixed.items[0].id,reason:'Try to rewrite stock'},admin,400);
+// Search finds old cases beyond the old 1,000-record cap, with server-side combined filters.
+const put=sqlite.prepare('INSERT INTO cases(id,orderId,version,mutation,status,data,created,updated) VALUES(?,?,1,?,?,?,?,?)');
+for(let n=0;n<1105;n++){const fixture={...mixed,id:'SEARCH-'+n,order:'ARCHIVE-'+n,channel:'Test channel',status:'Closed',created:'2000-01-01T00:00:00Z',updated:'2000-01-01T00:00:00Z'};put.run(fixture.id,fixture.orderId,'fixture','Closed',JSON.stringify(fixture),fixture.created,fixture.updated);}
+const search=(await call('cases?q=ARCHIVE-1104&page=1&channel=Test%20channel&refundStatus=Success',null,cs)).data;assert.equal(search.total,1);assert.equal(search.items[0].id,'SEARCH-1104');checks+=2;
+const page2=(await call('cases?page=2',null,cs)).data;assert.equal(page2.items.length,100);assert.ok(page2.total>1100);checks+=2;
+// RFC 6238 reference vector, enrollment, session revocation, replay prevention and recovery.
+assert.equal(await totp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',1,8),'94287082');checks++;
+const enrollment=(await call('mfa',{action:'begin',password:'Test-password-123'},admin)).data;
+const step=Math.floor(Date.now()/30000),otp=await totp(enrollment.secret,step);
+const enabled=(await call('mfa',{action:'confirm',password:'Test-password-123',code:otp},admin)).data;assert.equal(enabled.recoveryCodes.length,8);checks++;
+await call('cases?page=1',null,admin,401);
+await call('login',{email:'owner@example.test',password:'Test-password-123',otp},null,401);
+const admin2=(await call('login',{email:'owner@example.test',password:'Test-password-123',otp:enabled.recoveryCodes[0]})).cookie;
+await call('login',{email:'owner@example.test',password:'Test-password-123',otp:enabled.recoveryCodes[0]},null,401);
+await call('settings',{warehouses:['Main'],slaDays:1,inspectionDays:1,decisionDays:2,requireMfa:true,separationAbove:20000},admin2);
+await call('cases?page=1',null,finance,403);
+await call('recover',{email:'owner@example.test',recovery:enabled.recoveryCodes[1],password:'Recovered-password-123'});
+await call('cases?page=1',null,admin2,401);
+await call('recover',{email:'owner@example.test',recovery:enabled.recoveryCodes[1],password:'Another-password-123'},null,403);
+await call('login',{email:'owner@example.test',password:'Recovered-password-123',otp:enabled.recoveryCodes[2]});
+
 await call('logout',{},wh);await call('cases',null,wh,401);
-console.log(`PASS: ${checks} assertions — auth, RBAC, CSRF, multi-item receipt, photo requirement, locked inspections, stale edits, approval limits, separation of duties, failed-refund retry, duplicate prevention, order balance and stock-gated closure.`);
+console.log(`PASS: ${checks} workflow assertions, plus UK date allocation tests — including unidentified evidence, mixed remedies, credit notes, pagination, tasks, TOTP/recovery and audit controls.`);
 sqlite.close();

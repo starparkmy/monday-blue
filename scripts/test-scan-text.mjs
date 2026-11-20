@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {readFileSync,existsSync} from 'node:fs';
+import ts from 'typescript';
+const source=ts.transpileModule(readFileSync('lib/scan-text.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
+const {scanSuggestions,stickerDate}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+assert.ok(scanSuggestions('R32N 01 June 2026 SE-WHL').includes('R32N'));
+assert.ok(scanSuggestions('Collection note CN647529 SKU ECO2N-1').includes('CN647529'));
+assert.ok(scanSuggestions('Collection note CN647529 SKU ECO2N-1').includes('ECO2N-1'));
+assert.equal(stickerDate('R01N 02 November 2026 10:19 AM'),'2026-11-02');
+assert.equal(stickerDate('03/11/2026'),'');
+assert.equal(stickerDate('99 February 2026'),'');
+assert.equal(stickerDate('31 February 2026'),'');
+for(const asset of ['worker.min.js','eng.traineddata.gz','tesseract-core-lstm.wasm.js','tesseract-core-simd-lstm.wasm.js'])assert.ok(existsSync('public/ocr/'+asset));
+console.log('PASS: OCR suggestions, explicit date parsing, invalid/ambiguous date handling and local model assets.');
