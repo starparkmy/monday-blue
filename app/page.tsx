@@ -1,2 +1,2 @@
 import MobileBoard from './mobile-board';
-export default function Home(){return <MobileBoard/>}
+export default function Home(){return <MobileBoard navigation/>}

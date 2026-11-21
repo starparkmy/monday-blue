@@ -1,2 +1,5 @@
 import Desk from '../desk';
-export default function Legacy(){return <Desk/>}
+export default async function Legacy({searchParams}:{searchParams:Promise<{workspace?:string}>}){
+ const {workspace}=await searchParams;
+ return <Desk workspace={workspace}/>;
+}

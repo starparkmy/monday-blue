@@ -18,6 +18,19 @@ const files=new Map();const env={DB:db,BUCKET:{put:async(k,v)=>files.set(k,v),ge
 let checks=0;async function call(path,body,cookie,expected=200,origin='https://returns.test'){const r=await handleRms(new Request('https://returns.test/api/'+path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',Origin:origin}:{}),...(cookie?{Cookie:cookie}:{})},...(body?{body:JSON.stringify(body)}:{})}),env);const d=await r.json();assert.equal(r.status,expected,path+' '+JSON.stringify(d));checks++;return {data:d,cookie:r.headers.get('set-cookie')?.split(';')[0]};}
 await call('cases',null,null,401);await call('setup',{email:'owner@example.test',name:'Owner',password:'Test-password-123',token:'wrong'},null,403);
 const admin=(await call('setup',{email:'owner@example.test',name:'Owner',password:'Test-password-123',token:env.SETUP_TOKEN})).cookie;
+const signup={email:'new-staff@example.test',name:'New Staff',password:'Test-password-123'};
+const requested=await call('signup',{...signup,role:'Administrator',active:true,limit:1000000},null,202);
+assert.equal(requested.cookie,undefined);
+await call('signup',{...signup,password:'Other-password-123'},null,202);
+await call('login',signup,null,401);
+const pending=(await call('users',null,admin)).data.find(user=>user.email===signup.email);
+assert.equal(pending.role,'Warehouse');
+assert.equal(pending.active,0);
+assert.equal(pending.limit,0);
+assert.equal(pending.pendingSignup,1);
+await call('users',{id:pending.id,role:'Warehouse',active:true,limit:0},admin);
+assert.ok((await call('login',signup)).cookie);
+assert.equal((await call('users',null,admin)).data.find(user=>user.id===pending.id).pendingSignup,0);
 await call('setup',{email:'intruder@example.test',name:'Intruder',password:'Test-password-123',token:env.SETUP_TOKEN},null,409);
 await call('users',{email:'warehouse@example.test',name:'Warehouse Test',password:'Test-password-123',role:'Warehouse',limit:0},admin,201);
 await call('users',{email:'finance@example.test',name:'Finance Test',password:'Test-password-123',role:'Finance',limit:0},admin,201);

@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import ts from 'typescript';
 const source=ts.transpileModule(readFileSync('lib/rms.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
 const {handleRms,ukBusinessDate,reserveReturnNumber,totp,businessDue}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
-const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON');for(const f of readdirSync('drizzle').filter(x=>x.endsWith('.sql')).sort())sqlite.exec(readFileSync('drizzle/'+f,'utf8'));
+const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY');for(const f of readdirSync('drizzle').filter(x=>x.endsWith('.sql')).sort())sqlite.exec(readFileSync('drizzle/'+f,'utf8'));
 class Statement{constructor(sql,args=[]){this.sql=sql;this.args=args}bind(...args){return new Statement(this.sql,args)}async first(){return sqlite.prepare(this.sql).get(...this.args)||null}async all(){return {results:sqlite.prepare(this.sql).all(...this.args)}}async run(){return {meta:{changes:Number(sqlite.prepare(this.sql).run(...this.args).changes)}}}}
 const db={prepare:sql=>new Statement(sql),batch:async statements=>{sqlite.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sqlite.exec('COMMIT');return result}catch(e){sqlite.exec('ROLLBACK');throw e}}};
 // UK midnight follows GMT/BST; daily references are reserved atomically in SQLite.
@@ -31,6 +31,8 @@ const payload={order:'ORDER-100',channel:'NES Home',paid:10000,reason:'Damaged o
 await call('cases',payload,wh,403);
 let c=(await call('cases',{...payload,legacyCode:'R01N'},cs,201)).data;
 assert.match(c.id,/^RMA-/);assert.equal(c.shortCode,undefined);assert.ok(c.internalId);checks+=3;
+const rmaMatch=(await call('scan?code='+encodeURIComponent(c.id),null,wh)).data;
+assert.deepEqual(rmaMatch.items.map(item=>item.id),[c.id]);
 async function mutate(action,data={},cookie=admin,expected=200){const r=await call('cases/'+c.id+'/'+action,{version:c.version,...data},cookie,expected);if(expected===200)c=r.data;return r.data;}
 await mutate('refund',{},wh,403);await mutate('refund',{},finance,400);await mutate('close',{},cs,400);
 await mutate('receive',{location:'Main / quarantine',cartons:2,condition:'Crushed corner',quantities:c.items.map(i=>({id:i.id,received:1}))},wh);
@@ -41,6 +43,13 @@ const inspections=c.items.map(i=>({...i,condition:'Used',completeness:'Complete'
 await mutate('inspect',{items:inspections},wh,400);
 for(const item of c.items)await mutate('photo',{itemId:item.id,parcelId:c.parcels[0].id,mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXWQAAAAASUVORK5CYII='},wh);
 await mutate('inspect',{items:inspections},wh);assert.equal(c.status,'CS Review Required');assert.equal(c.refundStatus,'Not initiated');checks+=2;
+const reviewQueue=(await call('cases?queue=CS+review&page=1',null,cs)).data;
+assert.ok(reviewQueue.items.some(item=>item.id===c.id));
+const reviewFilter=(await call('cases?status=CS+Review+Required&page=1',null,cs)).data;
+assert.ok(reviewFilter.items.some(item=>item.id===c.id));
+const reviewed=(await call('cases/'+c.id,null,cs)).data;
+assert.equal(reviewed.photos.length,2);
+assert.equal(reviewed.inspectionStatus,'Submitted');
 await mutate('receive',{location:'A',cartons:1,quantities:[]},wh,409);
 c=await verifyUnits(c,2);
 await mutate('propose',{type:'Partial refund',amount:6000,reason:'Ceramic damage confirmed'},cs);

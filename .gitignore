@@ -1,5 +1,9 @@
 # Dependencies
 /node_modules/
+/.runtime/
+/node-install.log
+/node-extract.log
+/node-registry-backup.reg
 /.pnp
 .pnp.*
 # Keep authored Yarn tooling if the project adopts Yarn.
